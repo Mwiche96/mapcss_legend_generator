@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>MapCSS Color Legend Generator</title>
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    body {
+      font-family: 'Montserrat', sans-serif;
+      margin: 0;
+      padding: 0;
+      background-color: #f4f4f4;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    h1 {
+      text-align: center;
+      color: #333;
+      margin-bottom: 20px;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin: 10px auto;
+      background: #fff;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    }
+    colgroup col:first-child {
+      width: 40%;
+    }
+    colgroup col:last-child {
+      width: 60%;
+    }
+    th, td {
+      border: 1px solid #ddd;
+      padding: 12px 15px;
+      text-align: left;
+      overflow-wrap: break-word;
+    }
+    th {
+      background-color: #d11e54;
+      color: #fff;
+      font-weight: 600;
+    }
+    tr:nth-child(even) {
+      background-color: #f9f9f9;
+    }
+    .color-swatch {
+      display: inline-block;
+      width: 1.5em;
+      height: 1.5em;
+      vertical-align: middle;
+      margin-right: 0.5em;
+      border: 1px solid #333;
+    }
+    pre {
+      background: #f8f8f8;
+      padding: 0.5em;
+      margin: 0;
+      font-family: inherit;
+    }
+    .meta-section {
+      width: 100%;
+      margin: 20px auto;
+      padding: 20px;
+      border: 1px dashed #aaa;
+      background: #fff;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    }
+    .meta-section h2 {
+      margin-top: 0;
+      color: #333;
+    }
+    #output {
+      margin-top: 20px;
+      text-align: left;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>MapCSS Color Legend</h1>
+    <div id="output">Loading legend...</div>
+  </div>
+  <script>
+    const mapcssUrl = "https://raw.githubusercontent.com/open-energy-transition/grid-mapping-starter-kit/refs/heads/main/josm-config/transmission_grid_mapping_style.mapcss";
+    function splitSelectorsRobust(selectorsRaw) {
+      const selectors = [];
+      let current = '';
+      let bracketDepth = 0, parenDepth = 0, braceDepth = 0;
+      let inSingleQuote = false, inDoubleQuote = false, escape = false;
+      for (let i = 0; i < selectorsRaw.length; i++) {
+        const char = selectorsRaw[i];
+        if (escape) { current += char; escape = false; continue; }
+        if (char === '\\') { escape = true; current += char; continue; }
+        if (char === "'" && !inDoubleQuote) { inSingleQuote = !inSingleQuote; current += char; continue; }
+        if (char === '"' && !inSingleQuote) { inDoubleQuote = !inDoubleQuote; current += char; continue; }
+        if (inSingleQuote || inDoubleQuote) { current += char; continue; }
+        if (char === '[') { bracketDepth++; }
+        else if (char === ']') { bracketDepth--; }
+        else if (char === '(') { parenDepth++; }
+        else if (char === ')') { parenDepth--; }
+        else if (char === '{') { braceDepth++; }
+        else if (char === '}') { braceDepth--; }
+        if (char === ',' && bracketDepth === 0 && parenDepth === 0 && braceDepth === 0) {
+          const selectorStr = current.trim();
+          if (selectorStr) selectors.push(selectorStr);
+          current = '';
+        } else { current += char; }
+      }
+      const lastSelector = current.trim();
+      if (lastSelector) selectors.push(lastSelector);
+      return selectors;
+    }
+    function parseMapCSSContent(content) {
+      const ruleRegex = /([^{}]+)\s*\{\s*([^}]*)\s*\}/g;
+      const rules = [];
+      let match;
+      while ((match = ruleRegex.exec(content)) !== null) {
+        const selectorsRaw = match[1].trim();
+        const stylesRaw = match[2].trim();
+        const selectors = splitSelectorsRobust(selectorsRaw);
+        const propRegex = /([a-zA-Z0-9_\-\_]+)\s*:\s*([^;]+)\s*;/g;
+        const properties = {};
+        let propMatch;
+        while ((propMatch = propRegex.exec(stylesRaw)) !== null) {
+          const key = propMatch[1].trim();
+          const value = propMatch[2].trim();
+          properties[key] = value;
+        }
+        rules.push({ selectors, properties });
+      }
+      return rules;
+    }
+    function separateMetaRules(rules) {
+      const metaRules = [];
+      const normalRules = [];
+      rules.forEach(rule => {
+        if (rule.selectors.some(s => s.trim().toLowerCase() === "meta"))
+          metaRules.push(rule);
+        else normalRules.push(rule);
+      });
+      return { metaRules, normalRules };
+    }
+    function buildMetaSection(metaRules) {
+      if (metaRules.length === 0) return "";
+      const combinedProps = {};
+      metaRules.forEach(rule => {
+        for (const key in rule.properties) {
+          combinedProps[key] = rule.properties[key];
+        }
+      });
+      let metaHtml = Object.keys(combinedProps).length > 0 
+        ? "<ul>" + Object.entries(combinedProps).map(([key, value]) => `<li><strong>${key}:</strong> ${value}</li>`).join("") + "</ul>"
+        : "<p><em>No metadata properties</em></p>";
+      return `<div class="meta-section">
+                <h2>Metadata</h2>
+                ${metaHtml}
+              </div>`;
+    }
+    function generateLegendHTML(rules) {
+      const { metaRules, normalRules } = separateMetaRules(rules);
+      let rowsHtml = "";
+      normalRules.forEach(rule => {
+        const selectorsStr = rule.selectors.join("<br>");
+        const colorProps = {};
+        for (const key in rule.properties) {
+          if (key.toLowerCase().includes("color"))
+            colorProps[key] = rule.properties[key];
+        }
+        let colorPropsHtml = Object.keys(colorProps).length === 0 
+          ? "<em>No color properties</em>"
+          : Object.entries(colorProps).map(([key, value]) => {
+              const colorSwatch = `<span class="color-swatch" style="background:${value};"></span>`;
+              return `${colorSwatch} <strong>${key}</strong>: ${value}`;
+            }).join("<br>");
+        rowsHtml += `<tr>
+                       <td><pre>${selectorsStr}</pre></td>
+                       <td>${colorPropsHtml}</td>
+                     </tr>`;
+      });
+      const tableHtml = `<table>
+                           <colgroup>
+                             <col style="width: 40%;">
+                             <col style="width: 60%;">
+                           </colgroup>
+                           <tr>
+                             <th>Selectors</th>
+                             <th>Color Properties</th>
+                           </tr>
+                           ${rowsHtml}
+                         </table>`;
+      const metaSectionHtml = buildMetaSection(metaRules);
+      return `${metaSectionHtml}${tableHtml}`;
+    }
+    async function generateLegend() {
+      try {
+        const response = await fetch(mapcssUrl);
+        if (!response.ok) throw new Error("Network response was not ok");
+        const content = await response.text();
+        const rules = parseMapCSSContent(content);
+        const legendHTML = generateLegendHTML(rules);
+        document.getElementById("output").innerHTML = legendHTML;
+      } catch (error) {
+        document.getElementById("output").innerHTML = `<p>Error fetching or parsing MapCSS: ${error}</p>`;
+      }
+    }
+    window.addEventListener("load", generateLegend);
+  </script>
+</body>
+</html>
